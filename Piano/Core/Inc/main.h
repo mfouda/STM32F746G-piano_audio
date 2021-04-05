@@ -68,7 +68,6 @@ void Error_Handler(void);
 #define ULPI_D7_GPIO_Port GPIOB
 #define BP2_Pin GPIO_PIN_15
 #define BP2_GPIO_Port GPIOA
-#define BP2_EXTI_IRQn EXTI15_10_IRQn
 #define SWCLK_Pin GPIO_PIN_14
 #define SWCLK_GPIO_Port GPIOA
 #define SWDIO_Pin GPIO_PIN_13
@@ -87,7 +86,6 @@ void Error_Handler(void);
 #define OTG_FS_VBUS_GPIO_Port GPIOJ
 #define Audio_INT_Pin GPIO_PIN_6
 #define Audio_INT_GPIO_Port GPIOD
-#define Audio_INT_EXTI_IRQn EXTI9_5_IRQn
 #define NC1_Pin GPIO_PIN_8
 #define NC1_GPIO_Port GPIOI
 #define LCD_DE_Pin GPIO_PIN_7
@@ -140,12 +138,10 @@ void Error_Handler(void);
 #define LCD_G7_GPIO_Port GPIOK
 #define BP1_Pin GPIO_PIN_8
 #define BP1_GPIO_Port GPIOA
-#define BP1_EXTI_IRQn EXTI9_5_IRQn
 #define OSC_25M_Pin GPIO_PIN_0
 #define OSC_25M_GPIO_Port GPIOH
 #define LCD_INT_Pin GPIO_PIN_13
 #define LCD_INT_GPIO_Port GPIOI
-#define LCD_INT_EXTI_IRQn EXTI15_10_IRQn
 #define LCD_R0_Pin GPIO_PIN_15
 #define LCD_R0_GPIO_Port GPIOI
 #define LCD_G4_Pin GPIO_PIN_11

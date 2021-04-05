@@ -39,34 +39,34 @@ $(wildcard ../makefile.init) \
 $(wildcard ../makefile.targets) \
 
 
-BUILD_ARTIFACT_NAME := rtos_interface
+BUILD_ARTIFACT_NAME := Piano
 BUILD_ARTIFACT_EXTENSION := elf
 BUILD_ARTIFACT_PREFIX := 
 BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME).$(BUILD_ARTIFACT_EXTENSION)
 
 # Add inputs and outputs from these tool invocations to the build variables 
 EXECUTABLES += \
-rtos_interface.elf \
+Piano.elf \
 
 SIZE_OUTPUT += \
 default.size.stdout \
 
 OBJDUMP_LIST += \
-rtos_interface.list \
+Piano.list \
 
 OBJCOPY_BIN += \
-rtos_interface.bin \
+Piano.bin \
 
 
 # All Target
 all: main-build
 
 # Main-build Target
-main-build: rtos_interface.elf secondary-outputs
+main-build: Piano.elf secondary-outputs
 
 # Tool invocations
-rtos_interface.elf: $(OBJS) $(USER_OBJS) C:\Users\Sasa\Desktop\M1_E3A\Info_indus\442_II\STM32\STM32F746G-piano_audio\rtos_interface\STM32F746NGHX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "rtos_interface.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\Sasa\Desktop\M1_E3A\Info_indus\442_II\STM32\STM32F746G-piano_audio\rtos_interface\STM32F746NGHX_FLASH.ld" --specs=nosys.specs -Wl,-Map="rtos_interface.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Piano.elf: $(OBJS) $(USER_OBJS) C:\Users\Sasa\Desktop\M1_E3A\Info_indus\442_II\STM32\STM32F746G-piano_audio\Piano\STM32F746NGHX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Piano.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\Sasa\Desktop\M1_E3A\Info_indus\442_II\STM32\STM32F746G-piano_audio\Piano\STM32F746NGHX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Piano.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
@@ -75,13 +75,13 @@ default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-rtos_interface.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "rtos_interface.list"
+Piano.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "Piano.list"
 	@echo 'Finished building: $@'
 	@echo ' '
 
-rtos_interface.bin: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-objcopy  -O binary $(EXECUTABLES) "rtos_interface.bin"
+Piano.bin: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objcopy  -O binary $(EXECUTABLES) "Piano.bin"
 	@echo 'Finished building: $@'
 	@echo ' '
 

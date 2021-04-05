@@ -23,7 +23,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stm32746g_discovery_lcd.h"
+#include "stm32746g_discovery_ts.h"
+#include "stdio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,6 +35,17 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+// Global information
+#define lcd_w 480
+#define lcd_h 272
+
+// Keys dimensions
+#define white_w 60
+#define black_w 24
+#define white_h 272
+#define black_h 154
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -70,13 +83,11 @@ UART_HandleTypeDef huart6;
 SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
-osThreadId TimeHandle;
-osThreadId SourisHandle;
-osThreadId ChatHandle;
-osMessageQId myQueueP2VHandle;
-osMessageQId myQueueU2HHandle;
-osMutexId affichageHandle;
 /* USER CODE BEGIN PV */
+
+// Keys positions
+const uint16_t white[] = {0, white_w+1, (white_w+1)*2, (white_w+1)*3, (white_w+1)*4, (white_w+1)*5, (white_w+1)*6, (white_w+1)*7};
+const uint16_t black[] = {white[1]-black_w/2, white[2]-black_w/2, white[3]-black_w/2, white[4]-black_w/2, white[5]-black_w/2, white[6]-black_w/2};
 
 /* USER CODE END PV */
 
@@ -102,12 +113,10 @@ static void MX_UART7_Init(void);
 static void MX_FMC_Init(void);
 static void MX_DMA2D_Init(void);
 void StartDefaultTask(void const * argument);
-void GetTime(void const * argument);
-void MouseTask(void const * argument);
-void CatTask(void const * argument);
 
-static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
+
+static void Piano_Init(void);
 
 /* USER CODE END PFP */
 
@@ -123,7 +132,12 @@ static void MX_NVIC_Init(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-
+//	char text[50]={};
+//	static TS_StateTypeDef  TS_State;
+//	uint32_t potl,potr,joystick_h, joystick_v;
+//	ADC_ChannelConfTypeDef sConfig = {0};
+//	sConfig.Rank = ADC_REGULAR_RANK_1;
+//	sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -162,17 +176,18 @@ int main(void)
   MX_UART7_Init();
   MX_FMC_Init();
   MX_DMA2D_Init();
-
-  /* Initialize interrupts */
-  MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
+  BSP_LCD_Init();
+  BSP_LCD_LayerDefaultInit(0, LCD_FB_START_ADDRESS);
+  BSP_LCD_LayerDefaultInit(1, LCD_FB_START_ADDRESS+ BSP_LCD_GetXSize()*BSP_LCD_GetYSize()*4);
+  BSP_LCD_DisplayOn();
+  BSP_LCD_SelectLayer(1);
+
+  BSP_TS_Init(BSP_LCD_GetXSize(), BSP_LCD_GetYSize());
+
+  Piano_Init();
 
   /* USER CODE END 2 */
-
-  /* Create the mutex(es) */
-  /* definition and creation of affichage */
-  osMutexDef(affichage);
-  affichageHandle = osMutexCreate(osMutex(affichage));
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -186,35 +201,14 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
-  /* Create the queue(s) */
-  /* definition and creation of myQueueP2V */
-  osMessageQDef(myQueueP2V, 3, uint16_t);
-  myQueueP2VHandle = osMessageCreate(osMessageQ(myQueueP2V), NULL);
-
-  /* definition and creation of myQueueU2H */
-  osMessageQDef(myQueueU2H, 2, uint8_t);
-  myQueueU2HHandle = osMessageCreate(osMessageQ(myQueueU2H), NULL);
-
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
+  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 4096);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
-
-  /* definition and creation of Time */
-  osThreadDef(Time, GetTime, osPriorityNormal, 0, 1024);
-  TimeHandle = osThreadCreate(osThread(Time), NULL);
-
-  /* definition and creation of Souris */
-  osThreadDef(Souris, MouseTask, osPriorityAboveNormal, 0, 1024);
-  SourisHandle = osThreadCreate(osThread(Souris), NULL);
-
-  /* definition and creation of Chat */
-  osThreadDef(Chat, CatTask, osPriorityAboveNormal, 0, 1024);
-  ChatHandle = osThreadCreate(osThread(Chat), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -228,6 +222,40 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+//	  HAL_GPIO_WritePin(LED13_GPIO_Port,LED13_Pin,HAL_GPIO_ReadPin(BP1_GPIO_Port,BP1_Pin));
+//	  HAL_GPIO_WritePin(LED14_GPIO_Port,LED14_Pin,HAL_GPIO_ReadPin(BP2_GPIO_Port,BP2_Pin));
+//	  sprintf(text,"BP1 : %d",HAL_GPIO_ReadPin(BP1_GPIO_Port,BP1_Pin));
+//	  BSP_LCD_DisplayStringAtLine(5,(uint8_t*) text);
+//
+//	  sConfig.Channel = ADC_CHANNEL_6;
+//	  HAL_ADC_ConfigChannel(&hadc3, &sConfig);
+//	  HAL_ADC_Start(&hadc3);
+//	  while(HAL_ADC_PollForConversion(&hadc3, 100)!=HAL_OK);
+//	  potr = HAL_ADC_GetValue(&hadc3);
+//
+//	  sConfig.Channel = ADC_CHANNEL_7;
+//	  HAL_ADC_ConfigChannel(&hadc3, &sConfig);
+//	  HAL_ADC_Start(&hadc3);
+//	  while(HAL_ADC_PollForConversion(&hadc3, 100)!=HAL_OK);
+//	  potl = HAL_ADC_GetValue(&hadc3);
+//
+//	  sConfig.Channel = ADC_CHANNEL_8;
+//	  HAL_ADC_ConfigChannel(&hadc3, &sConfig);
+//	  HAL_ADC_Start(&hadc3);
+//	  while(HAL_ADC_PollForConversion(&hadc3, 100)!=HAL_OK);
+//	  joystick_v = HAL_ADC_GetValue(&hadc3);
+//
+//	  HAL_ADC_Start(&hadc1);
+//	  while(HAL_ADC_PollForConversion(&hadc1, 100)!=HAL_OK);
+//	  joystick_h = HAL_ADC_GetValue(&hadc1);
+//
+//	  sprintf(text,"POTL : %4u POTR : %4u joy_v : %4u joy_h : %4u",(uint)potl,(uint)potr,(uint)joystick_v,(uint)joystick_h);
+//	  BSP_LCD_DisplayStringAtLine(9,(uint8_t*) text);
+//
+//	  BSP_TS_GetState(&TS_State);
+//	  if(TS_State.touchDetected){
+//		  BSP_LCD_FillCircle(TS_State.touchX[0],TS_State.touchY[0],4);
+//	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -307,20 +335,6 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-}
-
-/**
-  * @brief NVIC Configuration.
-  * @retval None
-  */
-static void MX_NVIC_Init(void)
-{
-  /* EXTI9_5_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 7, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-  /* EXTI15_10_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 7, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
 
 /**
@@ -691,44 +705,44 @@ static void MX_RTC_Init(void)
 
   /** Initialize RTC and set the Time and Date
   */
-  sTime.Hours = 17;
-  sTime.Minutes = 15;
-  sTime.Seconds = 0;
+  sTime.Hours = 0x0;
+  sTime.Minutes = 0x0;
+  sTime.Seconds = 0x0;
   sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK)
+  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
   {
     Error_Handler();
   }
   sDate.WeekDay = RTC_WEEKDAY_MONDAY;
   sDate.Month = RTC_MONTH_JANUARY;
-  sDate.Date = 1;
-  sDate.Year = 0;
-  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK)
+  sDate.Date = 0x1;
+  sDate.Year = 0x0;
+  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK)
   {
     Error_Handler();
   }
   /** Enable the Alarm A
   */
-  sAlarm.AlarmTime.Hours = 0;
-  sAlarm.AlarmTime.Minutes = 0;
-  sAlarm.AlarmTime.Seconds = 0;
-  sAlarm.AlarmTime.SubSeconds = 0;
+  sAlarm.AlarmTime.Hours = 0x0;
+  sAlarm.AlarmTime.Minutes = 0x0;
+  sAlarm.AlarmTime.Seconds = 0x0;
+  sAlarm.AlarmTime.SubSeconds = 0x0;
   sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
   sAlarm.AlarmMask = RTC_ALARMMASK_NONE;
   sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
   sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
-  sAlarm.AlarmDateWeekDay = 1;
+  sAlarm.AlarmDateWeekDay = 0x1;
   sAlarm.Alarm = RTC_ALARM_A;
-  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BIN) != HAL_OK)
+  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK)
   {
     Error_Handler();
   }
   /** Enable the Alarm B
   */
   sAlarm.Alarm = RTC_ALARM_B;
-  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BIN) != HAL_OK)
+  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1283,7 +1297,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pins : BP2_Pin BP1_Pin */
   GPIO_InitStruct.Pin = BP2_Pin|BP1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
@@ -1401,6 +1415,27 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+/**
+  * @brief  Function initializing the Piano interface
+  * @param  argument: Not used
+  * @retval None
+  */
+static void Piano_Init(void){
+	// Draw param init
+	BSP_LCD_Clear(LCD_COLOR_WHITE);
+	BSP_LCD_SetFont(&Font12);
+	BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
+	BSP_LCD_SetBackColor(LCD_COLOR_wHITE);
+
+	// Drawing keys
+	for (int i=0;i<8;i++){
+		BSP_LCD_DrawRect(white[i], 0, white_w, white_w);
+	}
+	for (int i=0;i<6;i++){
+		BSP_LCD_FillRect(black[i], 0, black_w, black_w);
+	}
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1419,60 +1454,6 @@ void StartDefaultTask(void const * argument)
     osDelay(1);
   }
   /* USER CODE END 5 */
-}
-
-/* USER CODE BEGIN Header_GetTime */
-/**
-* @brief Function implementing the Time thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_GetTime */
-void GetTime(void const * argument)
-{
-  /* USER CODE BEGIN GetTime */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END GetTime */
-}
-
-/* USER CODE BEGIN Header_MouseTask */
-/**
-* @brief Function implementing the Souris thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_MouseTask */
-void MouseTask(void const * argument)
-{
-  /* USER CODE BEGIN MouseTask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END MouseTask */
-}
-
-/* USER CODE BEGIN Header_CatTask */
-/**
-* @brief Function implementing the Chat thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_CatTask */
-void CatTask(void const * argument)
-{
-  /* USER CODE BEGIN CatTask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END CatTask */
 }
 
  /**

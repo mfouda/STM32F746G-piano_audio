@@ -2,7 +2,8 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
+  * @brief          : Audio Touch screen piano application
+  * @autor			: Saša Radosavljevic
   ******************************************************************************
   * @attention
   *
@@ -41,11 +42,15 @@
 #define lcd_w 480
 #define lcd_h 272
 
-// Keys dimensions
+// Keys information
 #define white_w 60
 #define black_w 24
 #define white_h 272
 #define black_h 154
+
+#define N_white 8
+#define N_black 5
+
 
 /* USER CODE END PD */
 
@@ -85,12 +90,18 @@ SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
 osThreadId TouchHandle;
+osThreadId TS_scanHandle;
 osMessageQId TS_posHandle;
 /* USER CODE BEGIN PV */
 
 // Keys positions
 const uint16_t white[] = {0, white_w, white_w*2, white_w*3, white_w*4, white_w*5, white_w*6, white_w*7};
-const uint16_t black[] = {white[1]-black_w/2, white[2]-black_w/2, white[4]-black_w/2, white[5]-black_w/2, white[6]-black_w/2, white[7]+white_w-black_w/2};
+const uint16_t black[] = {white[1]-black_w/2, white[2]-black_w/2, white[4]-black_w/2, white[5]-black_w/2, white[6]-black_w/2};
+const uint16_t white_up[] = {0, black[0]+black_w, black[1]+black_w, white_w*3, black[2]+black_w, black[3]+black_w, black[4]+black_w, white_w*7};
+const uint16_t white_up_w[] = {white_w - black_w/2, white_w - black_w, white_w - black_w/2, white_w - black_w/2, white_w - black_w, white_w - black_w, white_w - black_w/2, white_w};
+
+// Simultaneous touches
+uint8_t nb_appuis = 0;
 
 /* USER CODE END PV */
 
@@ -117,6 +128,7 @@ static void MX_FMC_Init(void);
 static void MX_DMA2D_Init(void);
 void StartDefaultTask(void const * argument);
 void Touch_task(void const * argument);
+void TS_scan_task(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -138,7 +150,7 @@ int main(void)
   /* USER CODE BEGIN 1 */
 	uint8_t status = 0;
 //	char text[50]={};
-//	static TS_StateTypeDef  TS_State;
+
 //	uint32_t potl,potr,joystick_h, joystick_v;
 //	ADC_ChannelConfTypeDef sConfig = {0};
 //	sConfig.Rank = ADC_REGULAR_RANK_1;
@@ -198,7 +210,7 @@ int main(void)
 	  BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 95, (uint8_t *)"ERROR", CENTER_MODE);
 	  BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 80, (uint8_t *)"Touchscreen cannot be initialized", CENTER_MODE);
   }
-  BSP_TS_ITConfig();
+  //BSP_TS_ITConfig();
 
 
 
@@ -233,6 +245,10 @@ int main(void)
   /* definition and creation of Touch */
   osThreadDef(Touch, Touch_task, osPriorityAboveNormal, 0, 512);
   TouchHandle = osThreadCreate(osThread(Touch), NULL);
+
+  /* definition and creation of TS_scan */
+  osThreadDef(TS_scan, TS_scan_task, osPriorityNormal, 0, 128);
+  TS_scanHandle = osThreadCreate(osThread(TS_scan), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -1394,7 +1410,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : LCD_INT_Pin */
   GPIO_InitStruct.Pin = LCD_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(LCD_INT_GPIO_Port, &GPIO_InitStruct);
 
@@ -1435,10 +1451,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF10_OTG_HS;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
-
 }
 
 /* USER CODE BEGIN 4 */
@@ -1462,19 +1474,18 @@ static void Piano_Init(void){
 	for (int i=0;i<5;i++){
 		BSP_LCD_FillRect(black[i], 0, black_w, black_h);
 	}
-	BSP_LCD_FillRect(black[5], 0, black_w/2, black_h);
 }
 
 
 // Interrupt callback function
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-	// Touch screen interrupt
-	if(GPIO_Pin == TS_INT_PIN){
-		HAL_GPIO_TogglePin(LED12_GPIO_Port, LED12_Pin);
-
-		//BSP_TS_ITClear();
-	}
-}
+//void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+//	// Touch screen interrupt
+//	if(GPIO_Pin == TS_INT_PIN){
+//		HAL_GPIO_TogglePin(LED12_GPIO_Port, LED12_Pin);
+//
+//		//BSP_TS_ITClear();
+//	}
+//}
 
 /* USER CODE END 4 */
 
@@ -1505,14 +1516,91 @@ void StartDefaultTask(void const * argument)
 /* USER CODE END Header_Touch_task */
 void Touch_task(void const * argument)
 {
-	/* USER CODE BEGIN Touch_task */
+  /* USER CODE BEGIN Touch_task */
 	/* Infinite loop */
 	for(;;)
 	{
 		HAL_GPIO_TogglePin(LED11_GPIO_Port, LED11_Pin);
 		osDelay(200);
 	}
-	/* USER CODE END Touch_task */
+  /* USER CODE END Touch_task */
+}
+
+/* USER CODE BEGIN Header_TS_scan_task */
+/**
+* @brief Function implementing the TS_scan thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_TS_scan_task */
+void TS_scan_task(void const * argument)
+{
+  /* USER CODE BEGIN TS_scan_task */
+	static TS_StateTypeDef  prev_state;
+	TS_StateTypeDef TS_State;
+	const TickType_t period = 50;
+	TickType_t xLastWakeTime;
+	uint8_t w_pressed = 0, b_pressed = 0;
+
+	// Initialise the xLastWakeTime variable with the current time.
+	xLastWakeTime = xTaskGetTickCount();
+
+	/* Infinite loop */
+	for(;;)
+	{
+		 BSP_TS_GetState(&TS_State);
+		 if(TS_State.touchDetected != prev_state.touchDetected){
+			 prev_state.touchDetected = TS_State.touchDetected;
+			 nb_appuis = TS_State.touchDetected;
+			 for (uint8_t i=0; i<TS_State.touchDetected+1; i++){
+				 if(TS_State.touchY[i] < black_h){
+					 for(uint8_t b=0; b<N_black; b++){
+						 if(TS_State.touchX[i] > black[b] && TS_State.touchX[i] < black[b]+black_w){
+							 b_pressed |= 1<<b;
+							 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+							 BSP_LCD_FillRect(black[b]+1, 1, black_w-2, black_h-2);
+						 } else {
+							 BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
+							 BSP_LCD_FillRect(black[b]+1, 1, black_w-2, black_h-2);
+						 }
+					 }
+					 for(uint8_t w=0; w<N_white; w++){
+						 if(TS_State.touchX[i] > white_up[w] && TS_State.touchX[i] < white_up[w]+white_up_w[w]){
+							 w_pressed |= 1<<w;
+							 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
+							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
+						 } else {
+							 BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
+							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
+						 }
+					 }
+				 } else {
+					 for(uint8_t w=0; w<N_white; w++){
+						 if(TS_State.touchX[i] > white[w] && TS_State.touchX[i] < white[w]+white_w){
+							 w_pressed |= 1<<w;
+							 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
+							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
+						 } else {
+							 BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
+							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
+						 }
+					 }
+				 }
+
+				 //BSP_LCD_FillCircle(TS_State.touchX[i], TS_State.touchY[i], 4);
+
+				 //xQueueSend(TS_State.touchX[i]);
+				 //xQueueSend(TS_State.touchY[i]);
+
+			 }
+		 }
+		 vTaskDelayUntil(&xLastWakeTime, period);
+	}
+  /* USER CODE END TS_scan_task */
 }
 
  /**

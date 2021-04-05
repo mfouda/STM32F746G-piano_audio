@@ -1472,7 +1472,7 @@ static void Piano_Init(void){
 		BSP_LCD_DrawRect(white[i], 0, white_w, white_h);
 	}
 	for (int i=0;i<5;i++){
-		BSP_LCD_FillRect(black[i], 0, black_w, black_h);
+		BSP_LCD_FillRect(black[i], 0, black_w+1, black_h);
 	}
 }
 
@@ -1540,7 +1540,8 @@ void TS_scan_task(void const * argument)
 	TS_StateTypeDef TS_State;
 	const TickType_t period = 50;
 	TickType_t xLastWakeTime;
-	uint8_t w_pressed = 0, b_pressed = 0;
+	uint8_t w_pressed, b_pressed;
+	uint8_t w_old, b_old;
 
 	// Initialise the xLastWakeTime variable with the current time.
 	xLastWakeTime = xTaskGetTickCount();
@@ -1552,51 +1553,50 @@ void TS_scan_task(void const * argument)
 		 if(TS_State.touchDetected != prev_state.touchDetected){
 			 prev_state.touchDetected = TS_State.touchDetected;
 			 nb_appuis = TS_State.touchDetected;
-			 for (uint8_t i=0; i<TS_State.touchDetected+1; i++){
+			 w_pressed = 0;
+			 b_pressed = 0;
+			 for (uint8_t i=0; i<TS_State.touchDetected; i++){
 				 if(TS_State.touchY[i] < black_h){
 					 for(uint8_t b=0; b<N_black; b++){
 						 if(TS_State.touchX[i] > black[b] && TS_State.touchX[i] < black[b]+black_w){
 							 b_pressed |= 1<<b;
-							 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
-							 BSP_LCD_FillRect(black[b]+1, 1, black_w-2, black_h-2);
-						 } else {
-							 BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
-							 BSP_LCD_FillRect(black[b]+1, 1, black_w-2, black_h-2);
 						 }
 					 }
 					 for(uint8_t w=0; w<N_white; w++){
 						 if(TS_State.touchX[i] > white_up[w] && TS_State.touchX[i] < white_up[w]+white_up_w[w]){
 							 w_pressed |= 1<<w;
-							 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
-							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
-							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
-						 } else {
-							 BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
-							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
-							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
 						 }
 					 }
 				 } else {
 					 for(uint8_t w=0; w<N_white; w++){
 						 if(TS_State.touchX[i] > white[w] && TS_State.touchX[i] < white[w]+white_w){
 							 w_pressed |= 1<<w;
-							 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
-							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
-							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
-						 } else {
-							 BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
-							 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
-							 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
 						 }
 					 }
 				 }
-
-				 //BSP_LCD_FillCircle(TS_State.touchX[i], TS_State.touchY[i], 4);
-
-				 //xQueueSend(TS_State.touchX[i]);
-				 //xQueueSend(TS_State.touchY[i]);
-
 			 }
+			 for(uint8_t b=0; b<N_black; b++){
+				 if((b_pressed & (1<<b)) == (1<<b) && (b_old & (1<<b)) == 0){
+					 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+					 BSP_LCD_FillRect(black[b]+1, 1, black_w-1, black_h-1);
+				 } else if((b_pressed & (1<<b)) == 0 && (b_old & (1<<b)) == (1<<b)){
+					 BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
+					 BSP_LCD_FillRect(black[b]+1, 1, black_w-1, black_h-1);
+				 }
+			 }
+			 for(uint8_t w=0; w<N_white; w++){
+				 if((w_pressed & (1<<w)) == (1<<w) && (w_old & (1<<w)) == 0){
+					 BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+					 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
+					 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
+				 } else if((w_pressed & (1<<w)) == 0 && (w_old & (1<<w)) == (1<<w)){
+					 BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+					 BSP_LCD_FillRect(white_up[w]+1, 1, white_up_w[w]-1, black_h-1);
+					 BSP_LCD_FillRect(white[w]+1, black_h, white_w-1, white_h);
+				 }
+			 }
+			 b_old = b_pressed;
+			 w_old = w_pressed;
 		 }
 		 vTaskDelayUntil(&xLastWakeTime, period);
 	}

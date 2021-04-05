@@ -86,8 +86,8 @@ osThreadId defaultTaskHandle;
 /* USER CODE BEGIN PV */
 
 // Keys positions
-const uint16_t white[] = {0, white_w+1, (white_w+1)*2, (white_w+1)*3, (white_w+1)*4, (white_w+1)*5, (white_w+1)*6, (white_w+1)*7};
-const uint16_t black[] = {white[1]-black_w/2, white[2]-black_w/2, white[3]-black_w/2, white[4]-black_w/2, white[5]-black_w/2, white[6]-black_w/2};
+const uint16_t white[] = {0, white_w, white_w*2, white_w*3, white_w*4, white_w*5, white_w*6, white_w*7};
+const uint16_t black[] = {white[1]-black_w/2, white[2]-black_w/2, white[4]-black_w/2, white[5]-black_w/2, white[6]-black_w/2, white[7]+white_w-black_w/2};
 
 /* USER CODE END PV */
 
@@ -1425,15 +1425,16 @@ static void Piano_Init(void){
 	BSP_LCD_Clear(LCD_COLOR_WHITE);
 	BSP_LCD_SetFont(&Font12);
 	BSP_LCD_SetTextColor(LCD_COLOR_BLACK);
-	BSP_LCD_SetBackColor(LCD_COLOR_wHITE);
+	BSP_LCD_SetBackColor(LCD_COLOR_WHITE);
 
 	// Drawing keys
 	for (int i=0;i<8;i++){
-		BSP_LCD_DrawRect(white[i], 0, white_w, white_w);
+		BSP_LCD_DrawRect(white[i], 0, white_w, white_h);
 	}
-	for (int i=0;i<6;i++){
-		BSP_LCD_FillRect(black[i], 0, black_w, black_w);
+	for (int i=0;i<5;i++){
+		BSP_LCD_FillRect(black[i], 0, black_w, black_h);
 	}
+	BSP_LCD_FillRect(black[5], 0, black_w/2, black_h);
 }
 
 /* USER CODE END 4 */

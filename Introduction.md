@@ -6,5 +6,7 @@ Les mini-projets du premier s'étant terminés d'une très bonne manière pour l
 
 Voici donc la nouvelle carte si bien introduite.
 
-<img src="https://github.com/hiGepi/STM32F746G-piano_audio/blob/main/Rapport/carte.png?raw=true" alt="Carte de développement" width="200"/>
+<img src="Rapport/carte.png" alt="Carte de développement" width="500"/>
 
+Ainsi que le schéma synoptique expliquant le fonctionnement du projet.
+![Synoptique](Rapport/synoptique.png)

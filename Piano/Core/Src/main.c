@@ -25,6 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include "stm32746g_discovery_lcd.h"
 #include "stm32746g_discovery_ts.h"
+#include "stm32f7xx_it.h"
 #include "stdio.h"
 /* USER CODE END Includes */
 
@@ -83,6 +84,8 @@ UART_HandleTypeDef huart6;
 SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
+osThreadId TouchHandle;
+osMessageQId TS_posHandle;
 /* USER CODE BEGIN PV */
 
 // Keys positions
@@ -113,6 +116,7 @@ static void MX_UART7_Init(void);
 static void MX_FMC_Init(void);
 static void MX_DMA2D_Init(void);
 void StartDefaultTask(void const * argument);
+void Touch_task(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -132,6 +136,7 @@ static void Piano_Init(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
+	uint8_t status = 0;
 //	char text[50]={};
 //	static TS_StateTypeDef  TS_State;
 //	uint32_t potl,potr,joystick_h, joystick_v;
@@ -183,9 +188,19 @@ int main(void)
   BSP_LCD_DisplayOn();
   BSP_LCD_SelectLayer(1);
 
-  BSP_TS_Init(BSP_LCD_GetXSize(), BSP_LCD_GetYSize());
-
   Piano_Init();
+
+  status = BSP_TS_Init(BSP_LCD_GetXSize(), BSP_LCD_GetYSize());
+  if (status != TS_OK)
+  {
+	  BSP_LCD_SetBackColor(LCD_COLOR_WHITE);
+	  BSP_LCD_SetTextColor(LCD_COLOR_RED);
+	  BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 95, (uint8_t *)"ERROR", CENTER_MODE);
+	  BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 80, (uint8_t *)"Touchscreen cannot be initialized", CENTER_MODE);
+  }
+  BSP_TS_ITConfig();
+
+
 
   /* USER CODE END 2 */
 
@@ -201,14 +216,23 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* definition and creation of TS_pos */
+  osMessageQDef(TS_pos, 2, uint16_t);
+  TS_posHandle = osMessageCreate(osMessageQ(TS_pos), NULL);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 4096);
+  osThreadDef(defaultTask, StartDefaultTask, osPriorityIdle, 0, 128);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
+  /* definition and creation of Touch */
+  osThreadDef(Touch, Touch_task, osPriorityAboveNormal, 0, 512);
+  TouchHandle = osThreadCreate(osThread(Touch), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -1370,7 +1394,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : LCD_INT_Pin */
   GPIO_InitStruct.Pin = LCD_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(LCD_INT_GPIO_Port, &GPIO_InitStruct);
 
@@ -1411,6 +1435,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF10_OTG_HS;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
 }
 
 /* USER CODE BEGIN 4 */
@@ -1437,6 +1465,17 @@ static void Piano_Init(void){
 	BSP_LCD_FillRect(black[5], 0, black_w/2, black_h);
 }
 
+
+// Interrupt callback function
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+	// Touch screen interrupt
+	if(GPIO_Pin == TS_INT_PIN){
+		HAL_GPIO_TogglePin(LED12_GPIO_Port, LED12_Pin);
+
+		//BSP_TS_ITClear();
+	}
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1455,6 +1494,25 @@ void StartDefaultTask(void const * argument)
     osDelay(1);
   }
   /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_Touch_task */
+/**
+* @brief Function implementing the Touch thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Touch_task */
+void Touch_task(void const * argument)
+{
+	/* USER CODE BEGIN Touch_task */
+	/* Infinite loop */
+	for(;;)
+	{
+		HAL_GPIO_TogglePin(LED11_GPIO_Port, LED11_Pin);
+		osDelay(200);
+	}
+	/* USER CODE END Touch_task */
 }
 
  /**

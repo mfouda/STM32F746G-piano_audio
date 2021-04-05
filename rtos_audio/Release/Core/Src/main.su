@@ -1,9 +1,0 @@
-main.c:1498:6:StartDefaultTask	8	static
-main.c:1552:6:CatTask	8	static
-main.c:1516:6:GetTime	8	static
-main.c:1534:6:MouseTask	8	static
-main.c:317:6:SystemClock_Config	224	static,ignoring_inline_asm
-main.c:1478:9:CheckForUserInput	8	static
-main.c:141:5:main	264	static,ignoring_inline_asm
-main.c:1571:6:HAL_TIM_PeriodElapsedCallback	0	static
-main.c:1588:6:Error_Handler	0	static,ignoring_inline_asm

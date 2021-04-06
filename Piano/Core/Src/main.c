@@ -26,12 +26,16 @@
 /* USER CODE BEGIN Includes */
 #include "stm32746g_discovery_lcd.h"
 #include "stm32746g_discovery_ts.h"
+#include "stm32746g_discovery_audio.h"
+#include "stm32f7xx_hal_sai.h"
 #include "stm32f7xx_it.h"
 #include "stdio.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+
 
 /* USER CODE END PTD */
 
@@ -51,6 +55,17 @@
 #define N_white 8
 #define N_black 5
 
+/*Since SysTick is set to 1ms (unless to set it quicker) */
+/* to run up to 48khz, a buffer around 1000 (or more) is requested*/
+/* to run up to 96khz, a buffer around 2000 (or more) is requested*/
+#define AUDIO_BUFFER_SIZE       2048
+#define AUDIO_DEFAULT_VOLUME    70
+
+/* Audio file size and start address are defined here since the audio file is
+   stored in Flash memory as a constant table of 16-bit data */
+#define AUDIO_FILE_SIZE               524288
+#define AUDIO_START_OFFSET_ADDRESS    0            /* Offset relative to audio file header size */
+#define AUDIO_FILE_ADDRESS            0x08080000   /* Audio file address */
 
 /* USER CODE END PD */
 
@@ -63,8 +78,6 @@
 ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc3;
 
-DAC_HandleTypeDef hdac;
-
 DMA2D_HandleTypeDef hdma2d;
 
 I2C_HandleTypeDef hi2c1;
@@ -73,6 +86,9 @@ I2C_HandleTypeDef hi2c3;
 LTDC_HandleTypeDef hltdc;
 
 RTC_HandleTypeDef hrtc;
+
+SAI_HandleTypeDef hsai_BlockA2;
+DMA_HandleTypeDef hdma_sai2_a;
 
 SPI_HandleTypeDef hspi2;
 
@@ -89,7 +105,7 @@ UART_HandleTypeDef huart6;
 SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
-osThreadId TouchHandle;
+osThreadId AudioHandle;
 osThreadId TS_scanHandle;
 osMessageQId TS_posHandle;
 /* USER CODE BEGIN PV */
@@ -103,11 +119,54 @@ const uint16_t white_up_w[] = {white_w - black_w/2, white_w - black_w, white_w -
 // Simultaneous touches
 uint8_t nb_appuis = 0;
 
+// Audio
+typedef enum {
+  AUDIO_ERROR_NONE = 0,
+  AUDIO_ERROR_NOTREADY,
+  AUDIO_ERROR_IO,
+  AUDIO_ERROR_EOF,
+}AUDIO_ErrorTypeDef;
+
+typedef enum {
+	AUDIO_STATE_IDLE = 0,
+	AUDIO_STATE_INIT,
+	AUDIO_STATE_PLAYING,
+}AUDIO_PLAYBACK_StateTypeDef;
+
+typedef enum {
+	BUFFER_OFFSET_NONE = 0,
+	BUFFER_OFFSET_HALF,
+	BUFFER_OFFSET_FULL,
+}BUFFER_StateTypeDef;
+
+typedef struct {
+	uint8_t buff[AUDIO_BUFFER_SIZE];
+	uint32_t fptr;
+	BUFFER_StateTypeDef state;
+}AUDIO_BufferTypeDef;
+
+ALIGN_32BYTES (static AUDIO_BufferTypeDef  buffer_ctl);
+static AUDIO_PLAYBACK_StateTypeDef  audio_state;
+static uint32_t  AudioStartAddress;
+static uint32_t  AudioFileSize;
+__IO uint32_t uwVolume = 20;
+__IO uint32_t uwPauseEnabledStatus = 0;
+
+static uint32_t AudioFreq[9] = {8000 ,11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000};
+
+// Rec
+
+#define AUDIO_BLOCK_SIZE   ((uint32_t)512)
+#define AUDIO_BUFFER_IN    AUDIO_REC_START_ADDR     /* In SDRAM */
+#define AUDIO_BUFFER_OUT   (AUDIO_REC_START_ADDR + (AUDIO_BLOCK_SIZE * 2)) /* In SDRAM */
+
+extern uint32_t  audio_rec_buffer_state;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC3_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2C3_Init(void);
@@ -122,17 +181,25 @@ static void MX_TIM8_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 static void MX_ADC1_Init(void);
-static void MX_DAC_Init(void);
 static void MX_UART7_Init(void);
 static void MX_FMC_Init(void);
 static void MX_DMA2D_Init(void);
+static void MX_SAI2_Init(void);
 void StartDefaultTask(void const * argument);
-void Touch_task(void const * argument);
+void Audio_demo(void const * argument);
 void TS_scan_task(void const * argument);
 
 /* USER CODE BEGIN PFP */
 
 static void Piano_Init(void);
+uint8_t CheckForUserInput(void);
+
+// Audio
+static uint32_t GetData(void *pdata, uint32_t offset, uint8_t *pbuf, uint32_t NbrOfData);
+AUDIO_ErrorTypeDef AUDIO_Start(uint32_t audio_start_address, uint32_t audio_file_size);
+static void Audio_SetHint(void);
+static void AudioLoopback_SetHint(void);
+uint8_t AUDIO_Process(void);
 
 /* USER CODE END PFP */
 
@@ -175,6 +242,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC3_Init();
   MX_I2C1_Init();
   MX_I2C3_Init();
@@ -189,10 +257,10 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART6_UART_Init();
   MX_ADC1_Init();
-  MX_DAC_Init();
   MX_UART7_Init();
   MX_FMC_Init();
   MX_DMA2D_Init();
+  MX_SAI2_Init();
   /* USER CODE BEGIN 2 */
   BSP_LCD_Init();
   BSP_LCD_LayerDefaultInit(0, LCD_FB_START_ADDRESS);
@@ -242,9 +310,9 @@ int main(void)
   osThreadDef(defaultTask, StartDefaultTask, osPriorityIdle, 0, 128);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
-  /* definition and creation of Touch */
-  osThreadDef(Touch, Touch_task, osPriorityAboveNormal, 0, 512);
-  TouchHandle = osThreadCreate(osThread(Touch), NULL);
+  /* definition and creation of Audio */
+  osThreadDef(Audio, Audio_demo, osPriorityAboveNormal, 0, 1024);
+  AudioHandle = osThreadCreate(osThread(Audio), NULL);
 
   /* definition and creation of TS_scan */
   osThreadDef(TS_scan, TS_scan_task, osPriorityNormal, 0, 128);
@@ -357,8 +425,8 @@ void SystemClock_Config(void)
   }
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_LTDC|RCC_PERIPHCLK_RTC
                               |RCC_PERIPHCLK_USART1|RCC_PERIPHCLK_USART6
-                              |RCC_PERIPHCLK_UART7|RCC_PERIPHCLK_I2C1
-                              |RCC_PERIPHCLK_I2C3;
+                              |RCC_PERIPHCLK_UART7|RCC_PERIPHCLK_SAI2
+                              |RCC_PERIPHCLK_I2C1|RCC_PERIPHCLK_I2C3;
   PeriphClkInitStruct.PLLSAI.PLLSAIN = 384;
   PeriphClkInitStruct.PLLSAI.PLLSAIR = 5;
   PeriphClkInitStruct.PLLSAI.PLLSAIQ = 2;
@@ -366,6 +434,7 @@ void SystemClock_Config(void)
   PeriphClkInitStruct.PLLSAIDivQ = 1;
   PeriphClkInitStruct.PLLSAIDivR = RCC_PLLSAIDIVR_8;
   PeriphClkInitStruct.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
+  PeriphClkInitStruct.Sai2ClockSelection = RCC_SAI2CLKSOURCE_PLLSAI;
   PeriphClkInitStruct.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK2;
   PeriphClkInitStruct.Usart6ClockSelection = RCC_USART6CLKSOURCE_PCLK2;
   PeriphClkInitStruct.Uart7ClockSelection = RCC_UART7CLKSOURCE_PCLK1;
@@ -474,44 +543,6 @@ static void MX_ADC3_Init(void)
   /* USER CODE BEGIN ADC3_Init 2 */
 
   /* USER CODE END ADC3_Init 2 */
-
-}
-
-/**
-  * @brief DAC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_DAC_Init(void)
-{
-
-  /* USER CODE BEGIN DAC_Init 0 */
-
-  /* USER CODE END DAC_Init 0 */
-
-  DAC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN DAC_Init 1 */
-
-  /* USER CODE END DAC_Init 1 */
-  /** DAC Initialization
-  */
-  hdac.Instance = DAC;
-  if (HAL_DAC_Init(&hdac) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /** DAC channel OUT1 config
-  */
-  sConfig.DAC_Trigger = DAC_TRIGGER_NONE;
-  sConfig.DAC_OutputBuffer = DAC_OUTPUTBUFFER_ENABLE;
-  if (HAL_DAC_ConfigChannel(&hdac, &sConfig, DAC_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN DAC_Init 2 */
-
-  /* USER CODE END DAC_Init 2 */
 
 }
 
@@ -795,6 +826,55 @@ static void MX_RTC_Init(void)
   /* USER CODE BEGIN RTC_Init 2 */
 
   /* USER CODE END RTC_Init 2 */
+
+}
+
+/**
+  * @brief SAI2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SAI2_Init(void)
+{
+
+  /* USER CODE BEGIN SAI2_Init 0 */
+
+  /* USER CODE END SAI2_Init 0 */
+
+  /* USER CODE BEGIN SAI2_Init 1 */
+
+  /* USER CODE END SAI2_Init 1 */
+  hsai_BlockA2.Instance = SAI2_Block_A;
+  hsai_BlockA2.Init.Protocol = SAI_FREE_PROTOCOL;
+  hsai_BlockA2.Init.AudioMode = SAI_MODEMASTER_TX;
+  hsai_BlockA2.Init.DataSize = SAI_DATASIZE_8;
+  hsai_BlockA2.Init.FirstBit = SAI_FIRSTBIT_MSB;
+  hsai_BlockA2.Init.ClockStrobing = SAI_CLOCKSTROBING_FALLINGEDGE;
+  hsai_BlockA2.Init.Synchro = SAI_ASYNCHRONOUS;
+  hsai_BlockA2.Init.OutputDrive = SAI_OUTPUTDRIVE_DISABLE;
+  hsai_BlockA2.Init.NoDivider = SAI_MASTERDIVIDER_ENABLE;
+  hsai_BlockA2.Init.FIFOThreshold = SAI_FIFOTHRESHOLD_EMPTY;
+  hsai_BlockA2.Init.AudioFrequency = SAI_AUDIO_FREQUENCY_192K;
+  hsai_BlockA2.Init.SynchroExt = SAI_SYNCEXT_DISABLE;
+  hsai_BlockA2.Init.MonoStereoMode = SAI_STEREOMODE;
+  hsai_BlockA2.Init.CompandingMode = SAI_NOCOMPANDING;
+  hsai_BlockA2.Init.TriState = SAI_OUTPUT_NOTRELEASED;
+  hsai_BlockA2.FrameInit.FrameLength = 8;
+  hsai_BlockA2.FrameInit.ActiveFrameLength = 1;
+  hsai_BlockA2.FrameInit.FSDefinition = SAI_FS_STARTFRAME;
+  hsai_BlockA2.FrameInit.FSPolarity = SAI_FS_ACTIVE_LOW;
+  hsai_BlockA2.FrameInit.FSOffset = SAI_FS_FIRSTBIT;
+  hsai_BlockA2.SlotInit.FirstBitOffset = 0;
+  hsai_BlockA2.SlotInit.SlotSize = SAI_SLOTSIZE_DATASIZE;
+  hsai_BlockA2.SlotInit.SlotNumber = 1;
+  hsai_BlockA2.SlotInit.SlotActive = 0x00000000;
+  if (HAL_SAI_Init(&hsai_BlockA2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SAI2_Init 2 */
+
+  /* USER CODE END SAI2_Init 2 */
 
 }
 
@@ -1225,6 +1305,22 @@ static void MX_USART6_UART_Init(void)
 
 }
 
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream4_IRQn);
+
+}
+
 /* FMC initialization function */
 static void MX_FMC_Init(void)
 {
@@ -1335,12 +1431,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF10_OTG_HS;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : BP2_Pin BP1_Pin */
-  GPIO_InitStruct.Pin = BP2_Pin|BP1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
   /*Configure GPIO pins : LED14_Pin LED15_Pin */
   GPIO_InitStruct.Pin = LED14_Pin|LED15_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1407,6 +1497,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOH, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : BP1_Pin */
+  GPIO_InitStruct.Pin = BP1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BP1_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LCD_INT_Pin */
   GPIO_InitStruct.Pin = LCD_INT_Pin;
@@ -1476,6 +1572,245 @@ static void Piano_Init(void){
 	}
 }
 
+/**
+  * @brief  Check for user input.
+  * @param  None
+  * @retval Input state (1 : active / 0 : Inactive)
+  */
+uint8_t CheckForUserInput(void)
+{
+  if (BSP_PB_GetState(BUTTON_KEY) != RESET)
+  {
+    HAL_Delay(10);
+    while (BSP_PB_GetState(BUTTON_KEY) != RESET);
+    return 1 ;
+  }
+  return 0;
+}
+
+/**
+ * @brief  Display Audio demo hint
+ * @param  None
+ * @retval None
+ */
+static void Audio_SetHint(void)
+{
+	/* Clear the LCD */
+	BSP_LCD_Clear(LCD_COLOR_WHITE);
+
+	/* Set Audio Demo description */
+	BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+	BSP_LCD_FillRect(0, 0, BSP_LCD_GetXSize(), 90);
+	BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+	BSP_LCD_SetBackColor(LCD_COLOR_BLUE);
+	BSP_LCD_SetFont(&Font24);
+	BSP_LCD_DisplayStringAt(0, 0, (uint8_t *)"AUDIO EXAMPLE", CENTER_MODE);
+	BSP_LCD_SetFont(&Font12);
+	BSP_LCD_DisplayStringAt(0, 30, (uint8_t *)"Press User button for next menu", CENTER_MODE);
+	BSP_LCD_DisplayStringAt(0, 45, (uint8_t *)"Press Top/Bottom screen to change Volume   ", CENTER_MODE);
+	BSP_LCD_DisplayStringAt(0, 60, (uint8_t *)"Press Left/Right screen to change Frequency", CENTER_MODE);
+	BSP_LCD_DisplayStringAt(0, 75, (uint8_t *)"Press 2 fingers for Pause/Resume           ", CENTER_MODE);
+	/* Set the LCD Text Color */
+	BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+	BSP_LCD_DrawRect(10, 100, BSP_LCD_GetXSize() - 20, BSP_LCD_GetYSize() - 110);
+	BSP_LCD_DrawRect(11, 101, BSP_LCD_GetXSize() - 22, BSP_LCD_GetYSize() - 112);
+
+}
+
+/**
+  * @brief  Display Audio Record demo hint
+  * @param  None
+  * @retval None
+  */
+static void AudioLoopback_SetHint(void)
+{
+  /* Clear the LCD */
+  BSP_LCD_Clear(LCD_COLOR_WHITE);
+
+  /* Set Audio Demo description */
+  BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+  BSP_LCD_FillRect(0, 0, BSP_LCD_GetXSize(), 90);
+  BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
+  BSP_LCD_SetBackColor(LCD_COLOR_BLUE);
+  BSP_LCD_SetFont(&Font24);
+  BSP_LCD_DisplayStringAt(0, 0, (uint8_t *)"AUDIO LOOPBACK EXAMPLE", CENTER_MODE);
+  BSP_LCD_SetFont(&Font12);
+  BSP_LCD_DisplayStringAt(0, 30, (uint8_t *)"Press User button for next menu", CENTER_MODE);
+
+  /* Set the LCD Text Color */
+  BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+  BSP_LCD_DrawRect(10, 100, BSP_LCD_GetXSize() - 20, BSP_LCD_GetYSize() - 110);
+  BSP_LCD_DrawRect(11, 101, BSP_LCD_GetXSize() - 22, BSP_LCD_GetYSize() - 112);
+
+}
+
+/**
+  * @brief  Starts Audio streaming.
+  * @param  None
+  * @retval Audio error
+  */
+AUDIO_ErrorTypeDef AUDIO_Start(uint32_t audio_start_address, uint32_t audio_file_size)
+{
+	uint32_t bytesread;
+
+	buffer_ctl.state = BUFFER_OFFSET_NONE;
+	AudioStartAddress = audio_start_address;
+	AudioFileSize = audio_file_size;
+	bytesread = GetData( (void *)AudioStartAddress,
+			0,
+			&buffer_ctl.buff[0],
+			AUDIO_BUFFER_SIZE);
+	if(bytesread > 0)
+	{
+		/* Clean Data Cache to update the content of the SRAM */
+		SCB_CleanDCache_by_Addr((uint32_t*)&buffer_ctl.buff[0], AUDIO_BUFFER_SIZE/2);
+
+		BSP_AUDIO_OUT_Play((uint16_t*)&buffer_ctl.buff[0], AUDIO_BUFFER_SIZE);
+		audio_state = AUDIO_STATE_PLAYING;
+		buffer_ctl.fptr = bytesread;
+		return AUDIO_ERROR_NONE;
+	}
+	return AUDIO_ERROR_IO;
+}
+
+/**
+  * @brief  Manages Audio process.
+  * @param  None
+  * @retval Audio error
+  */
+uint8_t AUDIO_Process(void)
+{
+	uint32_t bytesread;
+	AUDIO_ErrorTypeDef error_state = AUDIO_ERROR_NONE;
+
+	switch(audio_state)
+	{
+	case AUDIO_STATE_PLAYING:
+
+		if(buffer_ctl.fptr >= AudioFileSize)
+		{
+			/* Play audio sample again ... */
+			buffer_ctl.fptr = 0;
+			error_state = AUDIO_ERROR_EOF;
+		}
+
+		/* 1st half buffer played; so fill it and continue playing from bottom*/
+		if(buffer_ctl.state == BUFFER_OFFSET_HALF)
+		{
+			bytesread = GetData((void *)AudioStartAddress,
+					buffer_ctl.fptr,
+					&buffer_ctl.buff[0],
+					AUDIO_BUFFER_SIZE /2);
+
+			if( bytesread >0)
+			{
+				buffer_ctl.state = BUFFER_OFFSET_NONE;
+				buffer_ctl.fptr += bytesread;
+
+				/* Clean Data Cache to update the content of the SRAM */
+				SCB_CleanDCache_by_Addr((uint32_t*)&buffer_ctl.buff[0], AUDIO_BUFFER_SIZE/2);
+			}
+		}
+
+		/* 2nd half buffer played; so fill it and continue playing from top */
+		if(buffer_ctl.state == BUFFER_OFFSET_FULL)
+		{
+			bytesread = GetData((void *)AudioStartAddress,
+					buffer_ctl.fptr,
+					&buffer_ctl.buff[AUDIO_BUFFER_SIZE /2],
+					AUDIO_BUFFER_SIZE /2);
+			if( bytesread > 0)
+			{
+				buffer_ctl.state = BUFFER_OFFSET_NONE;
+				buffer_ctl.fptr += bytesread;
+
+				/* Clean Data Cache to update the content of the SRAM */
+				SCB_CleanDCache_by_Addr((uint32_t*)&buffer_ctl.buff[AUDIO_BUFFER_SIZE/2], AUDIO_BUFFER_SIZE/2);
+			}
+		}
+		break;
+
+	default:
+		error_state = AUDIO_ERROR_NOTREADY;
+		break;
+	}
+
+	return (uint8_t) error_state;
+}
+
+/**
+  * @brief  Gets Data from storage unit.
+  * @param  None
+  * @retval None
+  */
+static uint32_t GetData(void *pdata, uint32_t offset, uint8_t *pbuf, uint32_t NbrOfData)
+{
+	uint8_t *lptr = pdata;
+	uint32_t ReadDataNbr;
+
+	ReadDataNbr = 0;
+	while(((offset + ReadDataNbr) < AudioFileSize) && (ReadDataNbr < NbrOfData))
+	{
+		pbuf[ReadDataNbr]= lptr [offset + ReadDataNbr];
+		ReadDataNbr++;
+	}
+	return ReadDataNbr;
+}
+
+/*------------------------------------------------------------------------------
+       Callbacks implementation:
+           the callbacks API are defined __weak in the stm32746g_discovery_audio.c file
+           and their implementation should be done the user code if they are needed.
+           Below some examples of callback implementations.
+  ----------------------------------------------------------------------------*/
+/**
+  * @brief  Manages the full Transfer complete event.
+  * @param  None
+  * @retval None
+  */
+void BSP_AUDIO_OUT_TransferComplete_CallBack(void)
+{
+	if(audio_state == AUDIO_STATE_PLAYING)
+	{
+		/* allows AUDIO_Process() to refill 2nd part of the buffer  */
+		buffer_ctl.state = BUFFER_OFFSET_FULL;
+	}
+}
+
+/**
+  * @brief  Manages the DMA Half Transfer complete event.
+  * @param  None
+  * @retval None
+  */
+void BSP_AUDIO_OUT_HalfTransfer_CallBack(void)
+{
+	if(audio_state == AUDIO_STATE_PLAYING)
+	{
+		/* allows AUDIO_Process() to refill 1st part of the buffer  */
+		buffer_ctl.state = BUFFER_OFFSET_HALF;
+	}
+}
+
+/**
+  * @brief  Manages the DMA FIFO error event.
+  * @param  None
+  * @retval None
+  */
+void BSP_AUDIO_OUT_Error_CallBack(void)
+{
+	/* Display message on the LCD screen */
+	BSP_LCD_SetBackColor(LCD_COLOR_RED);
+	BSP_LCD_DisplayStringAtLine(14, (uint8_t *)"       DMA  ERROR     ");
+
+	/* Stop the program with an infinite loop */
+	while (BSP_PB_GetState(BUTTON_KEY) != RESET)
+	{
+		return;
+	}
+
+  /* could also generate a system reset to recover from the error */
+  /* .... */
+}
 
 // Interrupt callback function
 //void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
@@ -1507,23 +1842,98 @@ void StartDefaultTask(void const * argument)
   /* USER CODE END 5 */
 }
 
-/* USER CODE BEGIN Header_Touch_task */
+/* USER CODE BEGIN Header_Audio_demo */
 /**
-* @brief Function implementing the Touch thread.
+* @brief Function implementing the Audio thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_Touch_task */
-void Touch_task(void const * argument)
+/* USER CODE END Header_Audio_demo */
+void Audio_demo(void const * argument)
 {
-  /* USER CODE BEGIN Touch_task */
-	/* Infinite loop */
-	for(;;)
-	{
-		HAL_GPIO_TogglePin(LED11_GPIO_Port, LED11_Pin);
-		osDelay(200);
-	}
-  /* USER CODE END Touch_task */
+  /* USER CODE BEGIN Audio_demo */
+	AudioLoopback_SetHint();
+
+	  /* Initialize Audio Recorder */
+	  if (BSP_AUDIO_IN_OUT_Init(INPUT_DEVICE_DIGITAL_MICROPHONE_2, OUTPUT_DEVICE_HEADPHONE, DEFAULT_AUDIO_IN_FREQ, DEFAULT_AUDIO_IN_BIT_RESOLUTION, DEFAULT_AUDIO_IN_CHANNEL_NBR) == AUDIO_OK)
+	  {
+	    BSP_LCD_SetBackColor(LCD_COLOR_WHITE);
+	    BSP_LCD_SetTextColor(LCD_COLOR_GREEN);
+	    BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 95, (uint8_t *)"  AUDIO RECORD INIT OK  ", CENTER_MODE);
+	  }
+	  else
+	  {
+	    BSP_LCD_SetBackColor(LCD_COLOR_WHITE);
+	    BSP_LCD_SetTextColor(LCD_COLOR_RED);
+	    BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 95, (uint8_t *)"  AUDIO RECORD INIT FAIL", CENTER_MODE);
+	    BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 80, (uint8_t *)" Try to reset board ", CENTER_MODE);
+	  }
+
+	  /* Display the state on the screen */
+	  BSP_LCD_SetBackColor(LCD_COLOR_WHITE);
+	  BSP_LCD_SetTextColor(LCD_COLOR_BLUE);
+	  BSP_LCD_DisplayStringAt(0, BSP_LCD_GetYSize() - 80, (uint8_t *)"Microphones sound streamed to headphones", CENTER_MODE);
+
+	  /* Initialize SDRAM buffers */
+	  memset((uint16_t*)AUDIO_BUFFER_IN, 0, AUDIO_BLOCK_SIZE*2);
+	  memset((uint16_t*)AUDIO_BUFFER_OUT, 0, AUDIO_BLOCK_SIZE*2);
+	  audio_rec_buffer_state = BUFFER_OFFSET_NONE;
+
+	  /* Start Recording */
+	  BSP_AUDIO_IN_Record((uint16_t*)AUDIO_BUFFER_IN, AUDIO_BLOCK_SIZE);
+
+	  /* Start Playback */
+	  BSP_AUDIO_OUT_SetAudioFrameSlot(CODEC_AUDIOFRAME_SLOT_02);
+	  BSP_AUDIO_OUT_Play((uint16_t*)AUDIO_BUFFER_OUT, AUDIO_BLOCK_SIZE * 2);
+  /* Infinite loop */
+  for(;;)
+  {
+	  /* Wait end of half block recording */
+	      while(audio_rec_buffer_state != BUFFER_OFFSET_HALF)
+	      {
+	        if (CheckForUserInput() > 0)
+	        {
+	          /* Stop Player before close Test */
+	          BSP_AUDIO_OUT_Stop(CODEC_PDWN_SW);
+	          /* Stop Player before close Test */
+	          BSP_AUDIO_OUT_Stop(CODEC_PDWN_SW);
+	          return;
+	        }
+	      }
+	      audio_rec_buffer_state = BUFFER_OFFSET_NONE;
+	      /* Copy recorded 1st half block */
+	      memcpy((uint16_t *)(AUDIO_BUFFER_OUT),
+	             (uint16_t *)(AUDIO_BUFFER_IN),
+	             AUDIO_BLOCK_SIZE);
+
+	      /* Wait end of one block recording */
+	      while(audio_rec_buffer_state != BUFFER_OFFSET_FULL)
+	      {
+	        if (CheckForUserInput() > 0)
+	        {
+	          /* Stop Player before close Test */
+	          BSP_AUDIO_OUT_Stop(CODEC_PDWN_SW);
+	          /* Stop Player before close Test */
+	          BSP_AUDIO_OUT_Stop(CODEC_PDWN_SW);
+	          return;
+	        }
+	      }
+	      audio_rec_buffer_state = BUFFER_OFFSET_NONE;
+	      /* Copy recorded 2nd half block */
+	      memcpy((uint16_t *)(AUDIO_BUFFER_OUT + (AUDIO_BLOCK_SIZE)),
+	             (uint16_t *)(AUDIO_BUFFER_IN + (AUDIO_BLOCK_SIZE)),
+	             AUDIO_BLOCK_SIZE);
+
+	      if (CheckForUserInput() > 0)
+	      {
+	        /* Stop recorder */
+	        BSP_AUDIO_IN_Stop(CODEC_PDWN_SW);
+	        /* Stop Player before close Test */
+	        BSP_AUDIO_OUT_Stop(CODEC_PDWN_SW);
+	        return;
+	      }
+  }
+  /* USER CODE END Audio_demo */
 }
 
 /* USER CODE BEGIN Header_TS_scan_task */
